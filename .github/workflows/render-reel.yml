@@ -36,21 +36,120 @@ jobs:
         env:
           IMAGE_URL: ${{ inputs.image_url }}
         run: |
-          curl --fail --location --retry 3 --output story.jpg "$IMAGE_URL"
-          test -s story.jpg
+          curl --fail --location --retry 3 --output story.png "$IMAGE_URL"
+          test -s story.png
+
+      - name: Build animated reel plan
+        id: plan
+        env:
+          DURATION: ${{ inputs.duration }}
+        run: |
+          python3 - <<'PY'
+          import os
+
+          duration = float(os.environ.get('DURATION', '7') or '7')
+          duration = max(5.0, min(15.0, duration))
+
+          segs = [
+              round(duration * 0.34, 2),
+              round(duration * 0.28, 2),
+              round(duration * 0.22, 2)
+          ]
+
+          seg4 = round(max(0.9, duration - sum(segs)), 2)
+          segs.append(seg4)
+
+          diff = round(duration - sum(segs), 2)
+          segs[3] = round(segs[3] + diff, 2)
+
+          def zoom_expr(start, end, dur):
+              frames = max(1, round(max(0.8, dur) * 30))
+              step = max(0.0001, abs(end - start) / frames)
+
+              if end >= start:
+                  return f"if(lte(on,1),{start:.2f},min({end:.2f},zoom+{step:.6f}))"
+
+              return f"if(lte(on,1),{start:.2f},max({end:.2f},zoom-{step:.6f}))"
+
+          def segment(index, focus_y, start_zoom, end_zoom, dur):
+              fade_start = max(0.1, round(dur - 0.22, 2))
+
+              return (
+                  f"[{index}:v]scale=1080:1920,"
+                  f"zoompan=z='{zoom_expr(start_zoom, end_zoom, dur)}':"
+                  f"x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':"
+                  f"y='clip({focus_y}-(ih/zoom/2),0,ih-ih/zoom)':"
+                  f"d=1:s=1080x1920:fps=30,"
+                  f"setsar=1,format=yuv420p,"
+                  f"fade=t=in:st=0:d=0.20,"
+                  f"fade=t=out:st={fade_start:.2f}:d=0.20"
+                  f"[s{index}]"
+              )
+
+          font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+          filters = [
+              segment(0, 620, 1.00, 1.14, segs[0]),
+              segment(1, 1325, 1.02, 1.22, segs[1]),
+              segment(2, 1555, 1.03, 1.18, segs[2]),
+              (
+                  f"[3:v]scale=1080:1920,"
+                  f"zoompan=z='{zoom_expr(1.05, 1.12, segs[3])}':"
+                  f"x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':"
+                  f"y='clip(1480-(ih/zoom/2),0,ih-ih/zoom)':"
+                  f"d=1:s=1080x1920:fps=30,"
+                  f"setsar=1,format=yuv420p,"
+                  f"fade=t=in:st=0:d=0.22,"
+                  f"drawbox=x=84:y=1470:w=912:h=250:color=black@0.28:t=fill,"
+                  f"drawtext=fontfile='{font}':"
+                  f"text='OFERTA DESTACADA':"
+                  f"x=(w-text_w)/2:y=1510:"
+                  f"fontsize=68:fontcolor=white:"
+                  f"borderw=2:bordercolor=black@0.25,"
+                  f"drawtext=fontfile='{font}':"
+                  f"text='ENTRA EN EL ENLACE DE LA BIO':"
+                  f"x=(w-text_w)/2:y=1604:"
+                  f"fontsize=42:fontcolor=white:"
+                  f"borderw=2:bordercolor=black@0.25"
+                  f"[s3]"
+              ),
+              "[s0][s1][s2][s3]concat=n=4:v=1:a=0[v]"
+          ]
+
+          with open("reel-filter.txt", "w", encoding="utf-8") as fh:
+              fh.write(";\n".join(filters))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              for idx, value in enumerate(segs, 1):
+                  out.write(f"seg{idx}={value:.2f}\n")
+          PY
 
       - name: Render MP4
         env:
           OUTPUT_NAME: ${{ inputs.output_name }}
-          DURATION: ${{ inputs.duration }}
+          SEG1: ${{ steps.plan.outputs.seg1 }}
+          SEG2: ${{ steps.plan.outputs.seg2 }}
+          SEG3: ${{ steps.plan.outputs.seg3 }}
+          SEG4: ${{ steps.plan.outputs.seg4 }}
         run: |
           mkdir -p renders
           SAFE_NAME="$(basename "$OUTPUT_NAME")"
-          ffmpeg -y -loop 1 -i story.jpg \
-            -t "$DURATION" \
-            -vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p" \
-            -r 30 -c:v libx264 -preset veryfast -pix_fmt yuv420p -movflags +faststart -an \
+
+          ffmpeg -y \
+            -loop 1 -t "$SEG1" -i story.png \
+            -loop 1 -t "$SEG2" -i story.png \
+            -loop 1 -t "$SEG3" -i story.png \
+            -loop 1 -t "$SEG4" -i story.png \
+            -filter_complex_script reel-filter.txt \
+            -map "[v]" \
+            -r 30 \
+            -c:v libx264 \
+            -preset veryfast \
+            -pix_fmt yuv420p \
+            -movflags +faststart \
+            -an \
             "renders/$SAFE_NAME"
+
           test -s "renders/$SAFE_NAME"
 
       - name: Keep latest renders
@@ -61,6 +160,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add renders/
-          git commit -m "Render Olechollos Reel" || exit 0
+          git commit -m "Render Olechollos Reel v2" || exit 0
           git push
