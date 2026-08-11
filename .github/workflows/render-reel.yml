@@ -3,8 +3,8 @@ name: Render Olechollos Reel
 on:
   workflow_dispatch:
     inputs:
-      image_url:
-        description: Public URL of the Olechollos story image
+      image_path:
+        description: Repository path of the Olechollos story image
         required: true
         type: string
       output_name:
@@ -20,6 +20,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: olechollos-reel-${{ inputs.output_name }}
+  cancel-in-progress: false
+
 jobs:
   render:
     runs-on: ubuntu-latest
@@ -27,18 +31,41 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Validate input
+        env:
+          IMAGE_PATH: ${{ inputs.image_path }}
+          OUTPUT_NAME: ${{ inputs.output_name }}
+        run: |
+          set -euo pipefail
+
+          case "$IMAGE_PATH" in
+            inputs/*.png|inputs/*.jpg|inputs/*.jpeg) ;;
+            *)
+              echo "Invalid image_path: $IMAGE_PATH"
+              exit 1
+              ;;
+          esac
+
+          test -s "$IMAGE_PATH"
+
+          SAFE_NAME="$(basename "$OUTPUT_NAME")"
+
+          case "$SAFE_NAME" in
+            *.mp4) ;;
+            *)
+              echo "Invalid output_name: $OUTPUT_NAME"
+              exit 1
+              ;;
+          esac
 
       - name: Install FFmpeg
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-
-      - name: Download image
-        env:
-          IMAGE_URL: ${{ inputs.image_url }}
-        run: |
-          curl --fail --location --retry 3 --output story.png "$IMAGE_URL"
-          test -s story.png
 
       - name: Build animated reel plan
         id: plan
@@ -51,8 +78,6 @@ jobs:
           duration = float(os.environ.get('DURATION', '7') or '7')
           duration = max(5.0, min(15.0, duration))
 
-          # Primer segundo completamente estático para que Instagram
-          # tenga un fotograma limpio para la portada.
           intro = 1.0 if duration >= 6 else 0.9
 
           remaining = max(3.6, duration - intro)
@@ -61,6 +86,7 @@ jobs:
           seg4 = round(max(1.2, duration - intro - seg2 - seg3), 2)
 
           total = round(intro + seg2 + seg3 + seg4, 2)
+
           if abs(total - duration) > 0.01:
               seg4 = round(seg4 + (duration - total), 2)
 
@@ -68,116 +94,3 @@ jobs:
 
           def zoom_expr(start, end, dur):
               frames = max(1, round(max(0.8, dur) * 30))
-              step = max(0.0001, abs(end - start) / frames)
-
-              if end >= start:
-                  return (
-                      f"if(lte(on,1),{start:.2f},"
-                      f"min({end:.2f},zoom+{step:.6f}))"
-                  )
-
-              return (
-                  f"if(lte(on,1),{start:.2f},"
-                  f"max({end:.2f},zoom-{step:.6f}))"
-              )
-
-          font = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
-
-          filters = [
-              # 1. Portada / creatividad completa sin movimiento ni fundido.
-              "[0:v]scale=1080:1920,setsar=1,format=yuv420p[s0]",
-
-              # 2. Zoom suave hacia producto.
-              (
-                  f"[1:v]scale=1080:1920,"
-                  f"zoompan=z='{zoom_expr(1.00, 1.08, segs[1])}':"
-                  f"x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':"
-                  f"y='clip(760-(ih/zoom/2),0,ih-ih/zoom)':"
-                  f"d=1:s=1080x1920:fps=30,"
-                  f"setsar=1,format=yuv420p[s1]"
-              ),
-
-              # 3. Acercamiento ligero al bloque de precio/descuento.
-              (
-                  f"[2:v]scale=1080:1920,"
-                  f"zoompan=z='{zoom_expr(1.02, 1.12, segs[2])}':"
-                  f"x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':"
-                  f"y='clip(1320-(ih/zoom/2),0,ih-ih/zoom)':"
-                  f"d=1:s=1080x1920:fps=30,"
-                  f"setsar=1,format=yuv420p[s2]"
-              ),
-
-              # 4. CTA final.
-              (
-                  f"[3:v]scale=1080:1920,"
-                  f"zoompan=z='{zoom_expr(1.04, 1.10, segs[3])}':"
-                  f"x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':"
-                  f"y='clip(1460-(ih/zoom/2),0,ih-ih/zoom)':"
-                  f"d=1:s=1080x1920:fps=30,"
-                  f"setsar=1,format=yuv420p,"
-                  f"drawbox=x=70:y=1450:w=940:h=270:"
-                  f"color=black@0.30:t=fill,"
-                  f"drawtext=fontfile='{font}':"
-                  f"text='CHOLLO DEL DIA':"
-                  f"x=(w-text_w)/2:y=1495:"
-                  f"fontsize=72:fontcolor=white:"
-                  f"borderw=2:bordercolor=black@0.25,"
-                  f"drawtext=fontfile='{font}':"
-                  f"text='ENTRA - ENLACE EN BIO':"
-                  f"x=(w-text_w)/2:y=1600:"
-                  f"fontsize=44:fontcolor=white:"
-                  f"borderw=2:bordercolor=black@0.25[s3]"
-              ),
-
-              "[s0][s1][s2][s3]concat=n=4:v=1:a=0[v]"
-          ]
-
-          with open('reel-filter.txt', 'w', encoding='utf-8') as fh:
-              fh.write(';\n'.join(filters))
-
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
-              for idx, value in enumerate(segs, 1):
-                  out.write(f"seg{idx}={value:.2f}\n")
-          PY
-
-      - name: Render MP4
-        env:
-          OUTPUT_NAME: ${{ inputs.output_name }}
-          SEG1: ${{ steps.plan.outputs.seg1 }}
-          SEG2: ${{ steps.plan.outputs.seg2 }}
-          SEG3: ${{ steps.plan.outputs.seg3 }}
-          SEG4: ${{ steps.plan.outputs.seg4 }}
-        run: |
-          mkdir -p renders
-
-          SAFE_NAME="$(basename "$OUTPUT_NAME")"
-
-          ffmpeg -y \
-            -loop 1 -t "$SEG1" -i story.png \
-            -loop 1 -t "$SEG2" -i story.png \
-            -loop 1 -t "$SEG3" -i story.png \
-            -loop 1 -t "$SEG4" -i story.png \
-            -filter_complex_script reel-filter.txt \
-            -map "[v]" \
-            -r 30 \
-            -c:v libx264 \
-            -preset veryfast \
-            -pix_fmt yuv420p \
-            -movflags +faststart \
-            -an \
-            "renders/$SAFE_NAME"
-
-          test -s "renders/$SAFE_NAME"
-
-      - name: Keep latest renders
-        run: |
-          ls renders/*.mp4 2>/dev/null | sort -r | tail -n +31 | xargs -r rm -f
-
-      - name: Publish rendered file
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add renders/
-          git commit -m "Render Olechollos Reel v4" || exit 0
-          git push
