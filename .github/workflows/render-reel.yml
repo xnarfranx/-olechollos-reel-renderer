@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       image_path:
-        description: Repository path of the Olechollos story image
+        description: Repository image path
         required: true
         type: string
       output_name:
@@ -21,18 +21,17 @@ permissions:
   contents: write
 
 concurrency:
-  group: olechollos-reel-${{ inputs.output_name }}
+  group: olechollos-reel-renderer
   cancel-in-progress: false
 
 jobs:
   render:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: main
           fetch-depth: 0
 
       - name: Validate input
@@ -41,56 +40,39 @@ jobs:
           OUTPUT_NAME: ${{ inputs.output_name }}
         run: |
           set -euo pipefail
-
-          case "$IMAGE_PATH" in
-            inputs/*.png|inputs/*.jpg|inputs/*.jpeg) ;;
-            *)
-              echo "Invalid image_path: $IMAGE_PATH"
-              exit 1
-              ;;
-          esac
-
+          case "$IMAGE_PATH" in inputs/*.png|inputs/*.jpg|inputs/*.jpeg) ;; *) exit 1 ;; esac
           test -s "$IMAGE_PATH"
-
-          SAFE_NAME="$(basename "$OUTPUT_NAME")"
-
-          case "$SAFE_NAME" in
-            *.mp4) ;;
-            *)
-              echo "Invalid output_name: $OUTPUT_NAME"
-              exit 1
-              ;;
-          esac
+          case "$(basename "$OUTPUT_NAME")" in *.mp4) ;; *) exit 1 ;; esac
 
       - name: Install FFmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
 
-      - name: Build animated reel plan
-        id: plan
+      - name: Render MP4
         env:
-          DURATION: ${{ inputs.duration }}
+          IMAGE_PATH: ${{ inputs.image_path }}
+          OUTPUT_NAME: ${{ inputs.output_name }}
         run: |
-          python3 - <<'PY'
-          import os
+          set -euo pipefail
+          mkdir -p renders
+          SAFE_NAME="$(basename "$OUTPUT_NAME")"
+          ffmpeg -y \
+            -loop 1 -t 1.00 -i "$IMAGE_PATH" \
+            -loop 1 -t 2.64 -i "$IMAGE_PATH" \
+            -loop 1 -t 1.80 -i "$IMAGE_PATH" \
+            -loop 1 -t 1.56 -i "$IMAGE_PATH" \
+            -filter_complex "[0:v]scale=1080:1920,setsar=1,format=yuv420p[s0];[1:v]scale=1080:1920,zoompan=z='min(1.08,zoom+0.00101)':x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':y='clip(760-(ih/zoom/2),0,ih-ih/zoom)':d=1:s=1080x1920:fps=30,setsar=1,format=yuv420p[s1];[2:v]scale=1080:1920,zoompan=z='min(1.12,zoom+0.00185)':x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':y='clip(1320-(ih/zoom/2),0,ih-ih/zoom)':d=1:s=1080x1920:fps=30,setsar=1,format=yuv420p[s2];[3:v]scale=1080:1920,zoompan=z='min(1.10,zoom+0.00214)':x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':y='clip(1460-(ih/zoom/2),0,ih-ih/zoom)':d=1:s=1080x1920:fps=30,setsar=1,format=yuv420p[s3];[s0][s1][s2][s3]concat=n=4:v=1:a=0[v]" \
+            -map "[v]" -r 30 -c:v libx264 -preset veryfast -pix_fmt yuv420p -movflags +faststart -an "renders/$SAFE_NAME"
+          test -s "renders/$SAFE_NAME"
 
-          duration = float(os.environ.get('DURATION', '7') or '7')
-          duration = max(5.0, min(15.0, duration))
-
-          intro = 1.0 if duration >= 6 else 0.9
-
-          remaining = max(3.6, duration - intro)
-          seg2 = round(remaining * 0.44, 2)
-          seg3 = round(remaining * 0.30, 2)
-          seg4 = round(max(1.2, duration - intro - seg2 - seg3), 2)
-
-          total = round(intro + seg2 + seg3 + seg4, 2)
-
-          if abs(total - duration) > 0.01:
-              seg4 = round(seg4 + (duration - total), 2)
-
-          segs = [round(intro, 2), seg2, seg3, seg4]
-
-          def zoom_expr(start, end, dur):
-              frames = max(1, round(max(0.8, dur) * 30))
+      - name: Publish rendered file
+        env:
+          IMAGE_PATH: ${{ inputs.image_path }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f "$IMAGE_PATH"
+          git add renders/ inputs/ 2>/dev/null || true
+          git commit -m "Render Olechollos Reel v5.1" || exit 0
+          git pull --rebase origin main
+          git push origin HEAD:main
