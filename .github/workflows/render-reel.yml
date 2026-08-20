@@ -4,35 +4,27 @@ on:
   workflow_dispatch:
     inputs:
       image_path:
-        description: Repository image path
+        required: true
+        type: string
+      intro_image_path:
         required: true
         type: string
       output_name:
-        description: Output MP4 filename
         required: true
         type: string
       duration:
-        description: Duration in seconds
         required: true
         default: '7'
         type: string
       style:
-        description: discount | saving | price | product
         required: false
         default: 'discount'
         type: string
-      hook_text:
-        description: Hook shown during the first second
-        required: false
-        default: 'CHOLLO DESTACADO'
-        type: string
       music_track:
-        description: Music track 0..5
         required: false
         default: '1'
         type: string
       music_volume:
-        description: Music volume 0..100
         required: false
         default: '18'
         type: string
@@ -55,92 +47,15 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Validate input
-        env:
-          IMAGE_PATH: ${{ inputs.image_path }}
-          OUTPUT_NAME: ${{ inputs.output_name }}
-          DURATION: ${{ inputs.duration }}
-          STYLE: ${{ inputs.style }}
-          MUSIC_TRACK: ${{ inputs.music_track }}
-          MUSIC_VOLUME: ${{ inputs.music_volume }}
-        run: |
-          set -euo pipefail
-
-          case "$IMAGE_PATH" in
-            inputs/*.png|inputs/*.jpg|inputs/*.jpeg) ;;
-            *) echo "Ruta de imagen no válida"; exit 1 ;;
-          esac
-
-          test -s "$IMAGE_PATH"
-
-          case "$(basename "$OUTPUT_NAME")" in
-            *.mp4) ;;
-            *) echo "Nombre MP4 no válido"; exit 1 ;;
-          esac
-
-          case "$STYLE" in
-            discount|saving|price|product) ;;
-            *) echo "Estilo no válido"; exit 1 ;;
-          esac
-
-          python3 - <<'PY'
-          import os
-
-          duration = float(os.environ["DURATION"])
-          track = int(os.environ["MUSIC_TRACK"])
-          volume = int(os.environ["MUSIC_VOLUME"])
-
-          if not 5 <= duration <= 15:
-              raise SystemExit("duration fuera de rango")
-
-          if not 0 <= track <= 5:
-              raise SystemExit("music_track fuera de rango")
-
-          if not 0 <= volume <= 100:
-              raise SystemExit("music_volume fuera de rango")
-          PY
-
       - name: Install FFmpeg
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          sudo apt-get install -y -qq ffmpeg
 
-      - name: Prepare hook text
-        env:
-          HOOK_TEXT: ${{ inputs.hook_text }}
-        run: |
-          python3 - <<'PY'
-          import os
-          import re
-
-          text = (os.environ.get("HOOK_TEXT") or "CHOLLO DESTACADO").strip()
-          text = text.replace("\n", " ").replace("\r", " ")
-
-          # Evitar caracteres que puedan romper drawtext.
-          text = text.replace("\\", "")
-          text = text.replace(":", " · ")
-          text = text.replace("'", "")
-          text = text.replace('"', "")
-          text = re.sub(r"\s+", " ", text).strip()
-
-          if not text:
-              text = "CHOLLO DESTACADO"
-
-          # Limitar longitud para que no se salga del cuadro.
-          text = text[:55]
-
-          open(
-              "/tmp/olechollos-hook.txt",
-              "w",
-              encoding="utf-8"
-          ).write(text)
-
-          print("Gancho:", text)
-          PY
-
-      - name: Render MP4 with movement hook and music
+      - name: Render Reel
         env:
           IMAGE_PATH: ${{ inputs.image_path }}
+          INTRO_PATH: ${{ inputs.intro_image_path }}
           OUTPUT_NAME: ${{ inputs.output_name }}
           DURATION: ${{ inputs.duration }}
           STYLE: ${{ inputs.style }}
@@ -148,6 +63,9 @@ jobs:
           MUSIC_VOLUME: ${{ inputs.music_volume }}
         run: |
           set -euo pipefail
+
+          test -s "$IMAGE_PATH"
+          test -s "$INTRO_PATH"
 
           mkdir -p renders
 
@@ -156,25 +74,30 @@ jobs:
           read N1 N2 N3 N4 <<< "$(python3 - <<'PY'
           import os
 
-          fps = 30
-
-          duration = max(
-              5.0,
-              min(
-                  15.0,
-                  float(os.environ["DURATION"])
+          total = int(
+              round(
+                  max(
+                      5,
+                      min(
+                          15,
+                          float(os.environ["DURATION"])
+                      )
+                  ) * 30
               )
           )
 
-          total = int(round(duration * fps))
-
           n1 = max(
               24,
-              int(round(total * 0.14))
+              int(total * 0.14)
           )
 
-          n2 = int(round(total * 0.34))
-          n3 = int(round(total * 0.27))
+          n2 = int(
+              total * 0.34
+          )
+
+          n3 = int(
+              total * 0.27
+          )
 
           n4 = max(
               1,
@@ -232,6 +155,16 @@ jobs:
               P4=0.91
               ;;
 
+            *)
+              Z2=0.16
+              Z3=0.20
+              Z4=0.18
+
+              P2=0.30
+              P3=0.78
+              P4=0.93
+              ;;
+
           esac
 
           cat > /tmp/reel-filter.txt <<EOF
@@ -245,21 +178,6 @@ jobs:
           d=${N1}:
           s=1080x1920:
           fps=30,
-          drawbox=
-          x=70:
-          y=250:
-          w=940:
-          h=150:
-          color=black@0.72:
-          t=fill,
-          drawtext=
-          fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:
-          textfile=/tmp/olechollos-hook.txt:
-          reload=0:
-          fontcolor=white:
-          fontsize=58:
-          x=(w-text_w)/2:
-          y=292,
           format=yuv420p
           [intro];
 
@@ -343,29 +261,25 @@ jobs:
           VOL="$(python3 - <<'PY'
           import os
 
-          volume = max(
-              0,
-              min(
-                  100,
-                  int(os.environ["MUSIC_VOLUME"])
-              )
+          print(
+              max(
+                  0,
+                  min(
+                      100,
+                      int(os.environ["MUSIC_VOLUME"])
+                  )
+              ) / 100
           )
-
-          print(volume / 100)
           PY
           )"
 
           FADE_OUT="$(python3 - <<'PY'
           import os
 
-          duration = float(
-              os.environ["DURATION"]
-          )
-
           print(
               max(
-                  0.0,
-                  duration - 0.55
+                  0,
+                  float(os.environ["DURATION"]) - 0.55
               )
           )
           PY
@@ -373,10 +287,8 @@ jobs:
 
           if [ -n "$MUSIC_FILE" ]; then
 
-            test -s "$MUSIC_FILE"
-
             ffmpeg -y \
-              -i "$IMAGE_PATH" \
+              -i "$INTRO_PATH" \
               -i "$IMAGE_PATH" \
               -i "$IMAGE_PATH" \
               -i "$IMAGE_PATH" \
@@ -401,7 +313,7 @@ jobs:
           else
 
             ffmpeg -y \
-              -i "$IMAGE_PATH" \
+              -i "$INTRO_PATH" \
               -i "$IMAGE_PATH" \
               -i "$IMAGE_PATH" \
               -i "$IMAGE_PATH" \
@@ -419,40 +331,12 @@ jobs:
 
           fi
 
-          rm -f \
-            /tmp/reel-filter.txt \
-            /tmp/olechollos-hook.txt
-
           test -s "renders/$SAFE_NAME"
-
-          ffprobe \
-            -v error \
-            -select_streams v:0 \
-            -show_entries stream=width,height,r_frame_rate \
-            -of default=nw=1 \
-            "renders/$SAFE_NAME"
-
-          if [ -n "$MUSIC_FILE" ]; then
-
-            ffprobe \
-              -v error \
-              -select_streams a:0 \
-              -show_entries stream=codec_name \
-              -of default=nw=1 \
-              "renders/$SAFE_NAME" \
-              | grep -q "codec_name=aac"
-
-          fi
-
-          echo "Reel listo"
-          echo "Estilo: ${STYLE}"
-          echo "Movimiento: activo"
-          echo "Gancho: activo"
-          echo "Pista: ${MUSIC_TRACK}"
 
       - name: Publish rendered file
         env:
           IMAGE_PATH: ${{ inputs.image_path }}
+          INTRO_PATH: ${{ inputs.intro_image_path }}
         run: |
           set -euo pipefail
 
@@ -464,7 +348,9 @@ jobs:
             user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
-          rm -f "$IMAGE_PATH"
+          rm -f \
+            "$IMAGE_PATH" \
+            "$INTRO_PATH"
 
           git add \
             renders/ \
@@ -472,7 +358,7 @@ jobs:
             2>/dev/null || true
 
           git commit \
-            -m "Render Olechollos Reel v6.4 · visible hook + movement + music" \
+            -m "Render Olechollos Reel v6.5 · baked hook + movement + music" \
             || exit 0
 
           git pull \
