@@ -86,17 +86,17 @@ jobs:
           python3 - <<'PY'
           import os
 
-          d = float(os.environ["DURATION"])
-          tr = int(os.environ["MUSIC_TRACK"])
-          vol = int(os.environ["MUSIC_VOLUME"])
+          duration = float(os.environ["DURATION"])
+          track = int(os.environ["MUSIC_TRACK"])
+          volume = int(os.environ["MUSIC_VOLUME"])
 
-          if not 5 <= d <= 15:
+          if not 5 <= duration <= 15:
               raise SystemExit("duration fuera de rango")
 
-          if not 0 <= tr <= 5:
+          if not 0 <= track <= 5:
               raise SystemExit("music_track fuera de rango")
 
-          if not 0 <= vol <= 100:
+          if not 0 <= volume <= 100:
               raise SystemExit("music_volume fuera de rango")
           PY
 
@@ -105,13 +105,45 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
 
-      - name: Render MP4 with hook movement and music
+      - name: Prepare hook text
+        env:
+          HOOK_TEXT: ${{ inputs.hook_text }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+
+          text = (os.environ.get("HOOK_TEXT") or "CHOLLO DESTACADO").strip()
+          text = text.replace("\n", " ").replace("\r", " ")
+
+          # Evitar caracteres que puedan romper drawtext.
+          text = text.replace("\\", "")
+          text = text.replace(":", " · ")
+          text = text.replace("'", "")
+          text = text.replace('"', "")
+          text = re.sub(r"\s+", " ", text).strip()
+
+          if not text:
+              text = "CHOLLO DESTACADO"
+
+          # Limitar longitud para que no se salga del cuadro.
+          text = text[:55]
+
+          open(
+              "/tmp/olechollos-hook.txt",
+              "w",
+              encoding="utf-8"
+          ).write(text)
+
+          print("Gancho:", text)
+          PY
+
+      - name: Render MP4 with movement hook and music
         env:
           IMAGE_PATH: ${{ inputs.image_path }}
           OUTPUT_NAME: ${{ inputs.output_name }}
           DURATION: ${{ inputs.duration }}
           STYLE: ${{ inputs.style }}
-          HOOK_TEXT: ${{ inputs.hook_text }}
           MUSIC_TRACK: ${{ inputs.music_track }}
           MUSIC_VOLUME: ${{ inputs.music_volume }}
         run: |
@@ -121,33 +153,12 @@ jobs:
 
           SAFE_NAME="$(basename "$OUTPUT_NAME")"
 
-          python3 - <<'PY'
-          import os
-
-          text = (
-              os.environ.get("HOOK_TEXT")
-              or "CHOLLO DESTACADO"
-          ).strip()
-
-          text = (
-              text
-              .replace("\n", " ")
-              .replace("\r", " ")
-          )
-
-          open(
-              "/tmp/olechollos-hook.txt",
-              "w",
-              encoding="utf-8"
-          ).write(text[:80])
-          PY
-
           read N1 N2 N3 N4 <<< "$(python3 - <<'PY'
           import os
 
           fps = 30
 
-          d = max(
+          duration = max(
               5.0,
               min(
                   15.0,
@@ -155,20 +166,15 @@ jobs:
               )
           )
 
-          total = int(round(d * fps))
+          total = int(round(duration * fps))
 
           n1 = max(
               24,
               int(round(total * 0.14))
           )
 
-          n2 = int(
-              round(total * 0.34)
-          )
-
-          n3 = int(
-              round(total * 0.27)
-          )
+          n2 = int(round(total * 0.34))
+          n3 = int(round(total * 0.27))
 
           n4 = max(
               1,
@@ -240,19 +246,20 @@ jobs:
           s=1080x1920:
           fps=30,
           drawbox=
-          x=60:
-          y=180:
-          w=960:
+          x=70:
+          y=250:
+          w=940:
           h=150:
-          color=black@0.68:
+          color=black@0.72:
           t=fill,
           drawtext=
           fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:
           textfile=/tmp/olechollos-hook.txt:
+          reload=0:
           fontcolor=white:
-          fontsize=62:
+          fontsize=58:
           x=(w-text_w)/2:
-          y=220,
+          y=292,
           format=yuv420p
           [intro];
 
@@ -336,29 +343,29 @@ jobs:
           VOL="$(python3 - <<'PY'
           import os
 
-          print(
-              max(
-                  0,
-                  min(
-                      100,
-                      int(os.environ["MUSIC_VOLUME"])
-                  )
-              ) / 100
+          volume = max(
+              0,
+              min(
+                  100,
+                  int(os.environ["MUSIC_VOLUME"])
+              )
           )
+
+          print(volume / 100)
           PY
           )"
 
           FADE_OUT="$(python3 - <<'PY'
           import os
 
-          d = float(
+          duration = float(
               os.environ["DURATION"]
           )
 
           print(
               max(
                   0.0,
-                  d - 0.55
+                  duration - 0.55
               )
           )
           PY
@@ -440,6 +447,7 @@ jobs:
           echo "Reel listo"
           echo "Estilo: ${STYLE}"
           echo "Movimiento: activo"
+          echo "Gancho: activo"
           echo "Pista: ${MUSIC_TRACK}"
 
       - name: Publish rendered file
@@ -464,7 +472,7 @@ jobs:
             2>/dev/null || true
 
           git commit \
-            -m "Render Olechollos Reel v6.3 · audience hook + movement + music" \
+            -m "Render Olechollos Reel v6.4 · visible hook + movement + music" \
             || exit 0
 
           git pull \
