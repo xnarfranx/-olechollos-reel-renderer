@@ -22,7 +22,7 @@ on:
         default: 'discount'
         type: string
       music_track:
-        description: Music track 0..5 (0 = no music)
+        description: Music track 0..5
         required: false
         default: '1'
         type: string
@@ -81,17 +81,17 @@ jobs:
           python3 - <<'PY'
           import os
 
-          d = float(os.environ["DURATION"])
+          duration = float(os.environ["DURATION"])
           track = int(os.environ["MUSIC_TRACK"])
-          vol = int(os.environ["MUSIC_VOLUME"])
+          volume = int(os.environ["MUSIC_VOLUME"])
 
-          if not 5 <= d <= 15:
+          if not 5 <= duration <= 15:
               raise SystemExit("duration fuera de rango")
 
           if not 0 <= track <= 5:
               raise SystemExit("music_track fuera de rango")
 
-          if not 0 <= vol <= 100:
+          if not 0 <= volume <= 100:
               raise SystemExit("music_volume fuera de rango")
           PY
 
@@ -100,7 +100,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
 
-      - name: Render MP4
+      - name: Render MP4 with movement and music
         env:
           IMAGE_PATH: ${{ inputs.image_path }}
           OUTPUT_NAME: ${{ inputs.output_name }}
@@ -115,10 +115,11 @@ jobs:
 
           SAFE_NAME="$(basename "$OUTPUT_NAME")"
 
-          read D1 D2 D3 D4 <<< "$(python3 - <<'PY'
+          read N1 N2 N3 N4 <<< "$(python3 - <<'PY'
           import os
 
-          d = max(
+          fps = 30
+          duration = max(
               5.0,
               min(
                   15.0,
@@ -126,203 +127,208 @@ jobs:
               )
           )
 
-          intro = 1.0 if d >= 6 else 0.9
-          rem = max(3.6, d - intro)
+          total = int(round(duration * fps))
 
-          d2 = round(rem * 0.44, 2)
-          d3 = round(rem * 0.30, 2)
+          n1 = int(round(total * 0.14))
+          n2 = int(round(total * 0.34))
+          n3 = int(round(total * 0.27))
+          n4 = total - n1 - n2 - n3
 
-          d4 = round(
-              max(
-                  1.2,
-                  d - intro - d2 - d3
-              ),
-              2
-          )
-
-          total = intro + d2 + d3 + d4
-
-          if abs(total - d) > 0.01:
-              d4 = round(
-                  d4 + (d - total),
-                  2
-              )
-
-          print(
-              intro,
-              d2,
-              d3,
-              d4
-          )
+          print(n1, n2, n3, n4)
           PY
           )"
+
+          echo "Frames: $N1 / $N2 / $N3 / $N4"
 
           case "$STYLE" in
 
             discount)
-              Y1=650
-              Y2=1250
-              Y3=1450
-              Z1=1.085
-              Z2=1.125
-              Z3=1.105
+              ZOOM2=0.15
+              ZOOM3=0.17
+              ZOOM4=0.18
+
+              POS2=0.30
+              POS3=0.70
+              POS4=0.92
               ;;
 
             price)
-              Y1=900
-              Y2=1390
-              Y3=1510
-              Z1=1.075
-              Z2=1.135
-              Z3=1.115
+              ZOOM2=0.13
+              ZOOM3=0.19
+              ZOOM4=0.18
+
+              POS2=0.38
+              POS3=0.78
+              POS4=0.92
               ;;
 
             product)
-              Y1=760
-              Y2=980
-              Y3=1370
-              Z1=1.095
-              Z2=1.105
-              Z3=1.100
+              ZOOM2=0.18
+              ZOOM3=0.14
+              ZOOM4=0.17
+
+              POS2=0.25
+              POS3=0.63
+              POS4=0.90
               ;;
 
           esac
 
-          cat > reel-video-filter.txt <<EOF
-          [0:v]scale=1080:1920,setsar=1,format=yuv420p[s0];
+          cat > reel-filter.txt <<EOF
 
-          [1:v]scale=1080:1920,
+          [0:v]
+          scale=1080:1920,
+          setsar=1,
           zoompan=
-          z='min(${Z1},zoom+0.00105)':
-          x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':
-          y='clip(${Y1}-(ih/zoom/2),0,ih-ih/zoom)':
-          d=1:
+          z='1':
+          x='0':
+          y='0':
+          d=${N1}:
           s=1080x1920:
           fps=30,
-          setsar=1,
-          format=yuv420p[s1];
+          format=yuv420p
+          [intro];
 
-          [2:v]scale=1080:1920,
+          [1:v]
+          scale=1080:1920,
+          setsar=1,
           zoompan=
-          z='min(${Z2},zoom+0.00165)':
-          x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':
-          y='clip(${Y2}-(ih/zoom/2),0,ih-ih/zoom)':
-          d=1:
+          z='1.00+${ZOOM2}*on/${N2}':
+          x='iw/2-(iw/zoom/2)':
+          y='(ih-ih/zoom)*${POS2}':
+          d=${N2}:
           s=1080x1920:
           fps=30,
-          setsar=1,
-          format=yuv420p[s2];
+          format=yuv420p
+          [product];
 
-          [3:v]scale=1080:1920,
+          [2:v]
+          scale=1080:1920,
+          setsar=1,
           zoompan=
-          z='min(${Z3},zoom+0.00145)':
-          x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':
-          y='clip(${Y3}-(ih/zoom/2),0,ih-ih/zoom)':
-          d=1:
+          z='1.03+${ZOOM3}*on/${N3}':
+          x='iw/2-(iw/zoom/2)':
+          y='(ih-ih/zoom)*${POS3}':
+          d=${N3}:
           s=1080x1920:
           fps=30,
-          setsar=1,
-          format=yuv420p,
-          drawbox=
-          x=70:
-          y=1450:
-          w=940:
-          h=270:
-          color=black@0.12:
-          t=fill[s3];
+          format=yuv420p
+          [price];
 
-          [s0][s1][s2][s3]
-          concat=n=4:v=1:a=0[v]
+          [3:v]
+          scale=1080:1920,
+          setsar=1,
+          zoompan=
+          z='1.05+${ZOOM4}*on/${N4}':
+          x='iw/2-(iw/zoom/2)':
+          y='(ih-ih/zoom)*${POS4}':
+          d=${N4}:
+          s=1080x1920:
+          fps=30,
+          format=yuv420p
+          [cta];
+
+          [intro][product][price][cta]
+          concat=n=4:v=1:a=0,
+          fps=30,
+          format=yuv420p
+          [v]
+
           EOF
 
-          BASE=(
-            ffmpeg -y
-            -loop 1 -t "$D1" -i "$IMAGE_PATH"
-            -loop 1 -t "$D2" -i "$IMAGE_PATH"
-            -loop 1 -t "$D3" -i "$IMAGE_PATH"
-            -loop 1 -t "$D4" -i "$IMAGE_PATH"
-          )
-
           case "$MUSIC_TRACK" in
+
             0)
               MUSIC_FILE=""
               ;;
+
             1)
               MUSIC_FILE="assets/music/mixkit-hip-hop-02-738.mp3"
               ;;
+
             2)
               MUSIC_FILE="assets/music/mixkit-tech-house-vibes-130.mp3"
               ;;
+
             3)
               MUSIC_FILE="assets/music/mixkit-motivating-mornings-33.mp3"
               ;;
+
             4)
               MUSIC_FILE="assets/music/mixkit-deep-urban-623.mp3"
               ;;
+
             5)
               MUSIC_FILE="assets/music/mixkit-raising-me-higher-34.mp3"
               ;;
+
           esac
+
+          VOL="$(python3 - <<'PY'
+          import os
+
+          volume = int(os.environ["MUSIC_VOLUME"])
+          volume = max(0, min(100, volume))
+
+          print(volume / 100)
+          PY
+          )"
+
+          FADE_OUT="$(python3 - <<'PY'
+          import os
+
+          duration = float(os.environ["DURATION"])
+
+          print(
+              max(
+                  0.0,
+                  duration - 0.55
+              )
+          )
+          PY
+          )"
 
           if [ -n "$MUSIC_FILE" ]; then
 
             test -s "$MUSIC_FILE"
 
-            VOL="$(python3 - <<'PY'
-          import os
-
-          print(
-              max(
-                  0,
-                  min(
-                      100,
-                      int(os.environ["MUSIC_VOLUME"])
-                  )
-              ) / 100
-          )
-          PY
-          )"
-
-            FADE_OUT="$(python3 - <<'PY'
-          import os
-
-          d = float(os.environ["DURATION"])
-
-          print(
-              max(
-                  0.0,
-                  d - 0.55
-              )
-          )
-          PY
-          )"
-
-            "${BASE[@]}" \
+            ffmpeg -y \
+              -i "$IMAGE_PATH" \
+              -i "$IMAGE_PATH" \
+              -i "$IMAGE_PATH" \
+              -i "$IMAGE_PATH" \
               -stream_loop -1 \
               -i "$MUSIC_FILE" \
-              -filter_complex_script reel-video-filter.txt \
+              -filter_complex_script reel-filter.txt \
               -map "[v]" \
               -map 4:a \
-              -af "volume=${VOL},atrim=0:${DURATION},afade=t=in:st=0:d=0.35,afade=t=out:st=${FADE_OUT}:d=0.55,alimiter=limit=0.90" \
+              -af "volume=${VOL},atrim=0:${DURATION},afade=t=in:st=0:d=0.30,afade=t=out:st=${FADE_OUT}:d=0.55,alimiter=limit=0.90" \
+              -t "$DURATION" \
               -r 30 \
               -c:v libx264 \
               -preset veryfast \
+              -crf 20 \
               -pix_fmt yuv420p \
               -c:a aac \
               -b:a 128k \
               -ar 44100 \
               -movflags +faststart \
-              -shortest \
               "renders/$SAFE_NAME"
 
           else
 
-            "${BASE[@]}" \
-              -filter_complex_script reel-video-filter.txt \
+            ffmpeg -y \
+              -i "$IMAGE_PATH" \
+              -i "$IMAGE_PATH" \
+              -i "$IMAGE_PATH" \
+              -i "$IMAGE_PATH" \
+              -filter_complex_script reel-filter.txt \
               -map "[v]" \
+              -t "$DURATION" \
               -r 30 \
               -c:v libx264 \
               -preset veryfast \
+              -crf 20 \
               -pix_fmt yuv420p \
               -movflags +faststart \
               -an \
@@ -330,9 +336,16 @@ jobs:
 
           fi
 
-          rm -f reel-video-filter.txt
+          rm -f reel-filter.txt
 
           test -s "renders/$SAFE_NAME"
+
+          ffprobe \
+            -v error \
+            -select_streams v:0 \
+            -show_entries stream=width,height,r_frame_rate \
+            -of default=nw=1 \
+            "renders/$SAFE_NAME"
 
           if [ -n "$MUSIC_FILE" ]; then
 
@@ -346,7 +359,11 @@ jobs:
 
           fi
 
-          echo "Reel listo · estilo ${STYLE} · pista ${MUSIC_TRACK} · volumen ${MUSIC_VOLUME}%"
+          echo "Reel terminado"
+          echo "Estilo: ${STYLE}"
+          echo "Música: ${MUSIC_TRACK}"
+          echo "Volumen: ${MUSIC_VOLUME}%"
+          echo "Movimiento: ACTIVO"
 
       - name: Publish rendered file
         env:
@@ -370,7 +387,7 @@ jobs:
             2>/dev/null || true
 
           git commit \
-            -m "Render Olechollos Reel v6.1 · real music" \
+            -m "Render Olechollos Reel v6.2 · movement + real music" \
             || exit 0
 
           git pull \
