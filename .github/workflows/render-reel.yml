@@ -248,19 +248,19 @@ jobs:
               MUSIC_FILE=""
               ;;
             1)
-              MUSIC_FILE="assets/music/track-1-hip-hop.mp3"
+              MUSIC_FILE="assets/music/mixkit-hip-hop-02-738.mp3"
               ;;
             2)
-              MUSIC_FILE="assets/music/track-2-tech-house.mp3"
+              MUSIC_FILE="assets/music/mixkit-tech-house-vibes-130.mp3"
               ;;
             3)
-              MUSIC_FILE="assets/music/track-3-motivating-mornings.mp3"
+              MUSIC_FILE="assets/music/mixkit-motivating-mornings-33.mp3"
               ;;
             4)
-              MUSIC_FILE="assets/music/track-4-deep-urban.mp3"
+              MUSIC_FILE="assets/music/mixkit-deep-urban-623.mp3"
               ;;
             5)
-              MUSIC_FILE="assets/music/track-5-raising-me-higher.mp3"
+              MUSIC_FILE="assets/music/mixkit-raising-me-higher-34.mp3"
               ;;
           esac
 
