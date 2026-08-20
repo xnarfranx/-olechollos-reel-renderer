@@ -27,6 +27,7 @@ concurrency:
 jobs:
   render:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,41 +39,338 @@ jobs:
         env:
           IMAGE_PATH: ${{ inputs.image_path }}
           OUTPUT_NAME: ${{ inputs.output_name }}
+          DURATION: ${{ inputs.duration }}
         run: |
           set -euo pipefail
-          case "$IMAGE_PATH" in inputs/*.png|inputs/*.jpg|inputs/*.jpeg) ;; *) exit 1 ;; esac
+
+          case "$IMAGE_PATH" in
+            inputs/*.png|inputs/*.jpg|inputs/*.jpeg) ;;
+            *) exit 1 ;;
+          esac
+
           test -s "$IMAGE_PATH"
-          case "$(basename "$OUTPUT_NAME")" in *.mp4) ;; *) exit 1 ;; esac
+
+          case "$(basename "$OUTPUT_NAME")" in
+            *.mp4) ;;
+            *) exit 1 ;;
+          esac
+
+          python3 - <<'PY'
+          import os
+
+          duration = float(os.environ["DURATION"])
+
+          if not 5 <= duration <= 15:
+              raise SystemExit("duration fuera de rango")
+          PY
 
       - name: Install FFmpeg
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
 
-      - name: Render MP4
+      - name: Render MP4 with music
         env:
           IMAGE_PATH: ${{ inputs.image_path }}
           OUTPUT_NAME: ${{ inputs.output_name }}
+          DURATION: ${{ inputs.duration }}
         run: |
           set -euo pipefail
+
           mkdir -p renders
+
           SAFE_NAME="$(basename "$OUTPUT_NAME")"
+
+          read D1 D2 D3 D4 <<< "$(python3 - <<'PY'
+          import os
+
+          duration = max(
+              5.0,
+              min(
+                  15.0,
+                  float(os.environ["DURATION"])
+              )
+          )
+
+          intro = 1.0 if duration >= 6 else 0.9
+
+          remaining = max(
+              3.6,
+              duration - intro
+          )
+
+          d2 = round(remaining * 0.44, 2)
+          d3 = round(remaining * 0.30, 2)
+
+          d4 = round(
+              max(
+                  1.2,
+                  duration - intro - d2 - d3
+              ),
+              2
+          )
+
+          total = intro + d2 + d3 + d4
+
+          if abs(total - duration) > 0.01:
+              d4 = round(
+                  d4 + (duration - total),
+                  2
+              )
+
+          print(
+              intro,
+              d2,
+              d3,
+              d4
+          )
+          PY
+          )"
+
+          HASH="$(printf '%s' "$SAFE_NAME" | cksum | awk '{print $1}')"
+
+          STYLE=$((HASH % 3))
+          TRACK=$(((HASH / 3) % 3))
+
+          case "$STYLE" in
+
+            0)
+              Y1=650
+              Y2=1250
+              Y3=1450
+
+              Z1=1.085
+              Z2=1.125
+              Z3=1.105
+              ;;
+
+            1)
+              Y1=900
+              Y2=1390
+              Y3=1510
+
+              Z1=1.075
+              Z2=1.135
+              Z3=1.115
+              ;;
+
+            *)
+              Y1=760
+              Y2=980
+              Y3=1370
+
+              Z1=1.095
+              Z2=1.105
+              Z3=1.100
+              ;;
+          esac
+
+          case "$TRACK" in
+
+            0)
+              F1=220
+              F2=440
+              F3=880
+
+              V1=0.070
+              V2=0.040
+              V3=0.020
+
+              MUSIC_NAME="Deal Pop"
+              ;;
+
+            1)
+              F1=196
+              F2=392
+              F3=784
+
+              V1=0.065
+              V2=0.040
+              V3=0.018
+
+              MUSIC_NAME="Price Pulse"
+              ;;
+
+            *)
+              F1=262
+              F2=330
+              F3=523
+
+              V1=0.055
+              V2=0.035
+              V3=0.018
+
+              MUSIC_NAME="Smooth Focus"
+              ;;
+          esac
+
+          FADE_OUT="$(python3 - <<'PY'
+          import os
+
+          duration = float(
+              os.environ["DURATION"]
+          )
+
+          print(
+              max(
+                  0.0,
+                  duration - 0.55
+              )
+          )
+          PY
+          )"
+
+          cat > reel-filter.txt <<EOF
+          [0:v]scale=1080:1920,setsar=1,format=yuv420p[s0];
+
+          [1:v]scale=1080:1920,
+          zoompan=
+          z='min(${Z1},zoom+0.00105)':
+          x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':
+          y='clip(${Y1}-(ih/zoom/2),0,ih-ih/zoom)':
+          d=1:
+          s=1080x1920:
+          fps=30,
+          setsar=1,
+          format=yuv420p[s1];
+
+          [2:v]scale=1080:1920,
+          zoompan=
+          z='min(${Z2},zoom+0.00165)':
+          x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':
+          y='clip(${Y2}-(ih/zoom/2),0,ih-ih/zoom)':
+          d=1:
+          s=1080x1920:
+          fps=30,
+          setsar=1,
+          format=yuv420p[s2];
+
+          [3:v]scale=1080:1920,
+          zoompan=
+          z='min(${Z3},zoom+0.00145)':
+          x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':
+          y='clip(${Y3}-(ih/zoom/2),0,ih-ih/zoom)':
+          d=1:
+          s=1080x1920:
+          fps=30,
+          setsar=1,
+          format=yuv420p,
+          drawbox=
+          x=70:
+          y=1450:
+          w=940:
+          h=270:
+          color=black@0.12:
+          t=fill[s3];
+
+          [s0][s1][s2][s3]
+          concat=n=4:v=1:a=0[v];
+
+          [4:a]volume=${V1}[a1];
+
+          [5:a]volume=${V2}[a2];
+
+          [6:a]volume=${V3}[a3];
+
+          [a1][a2][a3]
+          amix=
+          inputs=3:
+          normalize=0,
+          tremolo=
+          f=4.2:
+          d=0.18,
+          lowpass=f=3600,
+          afade=
+          t=in:
+          st=0:
+          d=0.35,
+          afade=
+          t=out:
+          st=${FADE_OUT}:
+          d=0.55,
+          alimiter=limit=0.82[a]
+          EOF
+
           ffmpeg -y \
-            -loop 1 -t 1.00 -i "$IMAGE_PATH" \
-            -loop 1 -t 2.64 -i "$IMAGE_PATH" \
-            -loop 1 -t 1.80 -i "$IMAGE_PATH" \
-            -loop 1 -t 1.56 -i "$IMAGE_PATH" \
-            -filter_complex "[0:v]scale=1080:1920,setsar=1,format=yuv420p[s0];[1:v]scale=1080:1920,zoompan=z='min(1.08,zoom+0.00101)':x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':y='clip(760-(ih/zoom/2),0,ih-ih/zoom)':d=1:s=1080x1920:fps=30,setsar=1,format=yuv420p[s1];[2:v]scale=1080:1920,zoompan=z='min(1.12,zoom+0.00185)':x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':y='clip(1320-(ih/zoom/2),0,ih-ih/zoom)':d=1:s=1080x1920:fps=30,setsar=1,format=yuv420p[s2];[3:v]scale=1080:1920,zoompan=z='min(1.10,zoom+0.00214)':x='clip(540-(iw/zoom/2),0,iw-iw/zoom)':y='clip(1460-(ih/zoom/2),0,ih-ih/zoom)':d=1:s=1080x1920:fps=30,setsar=1,format=yuv420p[s3];[s0][s1][s2][s3]concat=n=4:v=1:a=0[v]" \
-            -map "[v]" -r 30 -c:v libx264 -preset veryfast -pix_fmt yuv420p -movflags +faststart -an "renders/$SAFE_NAME"
+            -loop 1 \
+            -t "$D1" \
+            -i "$IMAGE_PATH" \
+            -loop 1 \
+            -t "$D2" \
+            -i "$IMAGE_PATH" \
+            -loop 1 \
+            -t "$D3" \
+            -i "$IMAGE_PATH" \
+            -loop 1 \
+            -t "$D4" \
+            -i "$IMAGE_PATH" \
+            -f lavfi \
+            -t "$DURATION" \
+            -i "sine=frequency=${F1}:sample_rate=44100" \
+            -f lavfi \
+            -t "$DURATION" \
+            -i "sine=frequency=${F2}:sample_rate=44100" \
+            -f lavfi \
+            -t "$DURATION" \
+            -i "sine=frequency=${F3}:sample_rate=44100" \
+            -filter_complex_script reel-filter.txt \
+            -map "[v]" \
+            -map "[a]" \
+            -r 30 \
+            -c:v libx264 \
+            -preset veryfast \
+            -pix_fmt yuv420p \
+            -c:a aac \
+            -b:a 128k \
+            -ar 44100 \
+            -movflags +faststart \
+            -shortest \
+            "renders/$SAFE_NAME"
+
+          rm -f reel-filter.txt
+
           test -s "renders/$SAFE_NAME"
+
+          ffprobe \
+            -v error \
+            -select_streams a:0 \
+            -show_entries stream=codec_name \
+            -of default=nw=1 \
+            "renders/$SAFE_NAME" \
+            | grep -q "codec_name=aac"
+
+          echo "Reel listo · estilo $STYLE · música $MUSIC_NAME"
 
       - name: Publish rendered file
         env:
           IMAGE_PATH: ${{ inputs.image_path }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git config \
+            user.name \
+            "github-actions[bot]"
+
+          git config \
+            user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
           rm -f "$IMAGE_PATH"
-          git add renders/ inputs/ 2>/dev/null || true
-          git commit -m "Render Olechollos Reel v5.1" || exit 0
-          git pull --rebase origin main
-          git push origin HEAD:main
+
+          git add \
+            renders/ \
+            inputs/ \
+            2>/dev/null || true
+
+          git commit \
+            -m "Render Olechollos Reel v6 · music + rotating styles" \
+            || exit 0
+
+          git pull \
+            --rebase \
+            origin \
+            main
+
+          git push \
+            origin \
+            HEAD:main
