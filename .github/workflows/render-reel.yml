@@ -17,9 +17,14 @@ on:
         default: '7'
         type: string
       style:
-        description: discount | price | product
+        description: discount | saving | price | product
         required: false
         default: 'discount'
+        type: string
+      hook_text:
+        description: Hook shown during the first second
+        required: false
+        default: 'CHOLLO DESTACADO'
         type: string
       music_track:
         description: Music track 0..5
@@ -63,49 +68,50 @@ jobs:
 
           case "$IMAGE_PATH" in
             inputs/*.png|inputs/*.jpg|inputs/*.jpeg) ;;
-            *) exit 1 ;;
+            *) echo "Ruta de imagen no válida"; exit 1 ;;
           esac
 
           test -s "$IMAGE_PATH"
 
           case "$(basename "$OUTPUT_NAME")" in
             *.mp4) ;;
-            *) exit 1 ;;
+            *) echo "Nombre MP4 no válido"; exit 1 ;;
           esac
 
           case "$STYLE" in
-            discount|price|product) ;;
-            *) exit 1 ;;
+            discount|saving|price|product) ;;
+            *) echo "Estilo no válido"; exit 1 ;;
           esac
 
           python3 - <<'PY'
           import os
 
-          duration = float(os.environ["DURATION"])
-          track = int(os.environ["MUSIC_TRACK"])
-          volume = int(os.environ["MUSIC_VOLUME"])
+          d = float(os.environ["DURATION"])
+          tr = int(os.environ["MUSIC_TRACK"])
+          vol = int(os.environ["MUSIC_VOLUME"])
 
-          if not 5 <= duration <= 15:
+          if not 5 <= d <= 15:
               raise SystemExit("duration fuera de rango")
 
-          if not 0 <= track <= 5:
+          if not 0 <= tr <= 5:
               raise SystemExit("music_track fuera de rango")
 
-          if not 0 <= volume <= 100:
+          if not 0 <= vol <= 100:
               raise SystemExit("music_volume fuera de rango")
           PY
 
       - name: Install FFmpeg
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
 
-      - name: Render MP4 with movement and music
+      - name: Render MP4 with hook movement and music
         env:
           IMAGE_PATH: ${{ inputs.image_path }}
           OUTPUT_NAME: ${{ inputs.output_name }}
           DURATION: ${{ inputs.duration }}
           STYLE: ${{ inputs.style }}
+          HOOK_TEXT: ${{ inputs.hook_text }}
           MUSIC_TRACK: ${{ inputs.music_track }}
           MUSIC_VOLUME: ${{ inputs.music_volume }}
         run: |
@@ -115,11 +121,33 @@ jobs:
 
           SAFE_NAME="$(basename "$OUTPUT_NAME")"
 
+          python3 - <<'PY'
+          import os
+
+          text = (
+              os.environ.get("HOOK_TEXT")
+              or "CHOLLO DESTACADO"
+          ).strip()
+
+          text = (
+              text
+              .replace("\n", " ")
+              .replace("\r", " ")
+          )
+
+          open(
+              "/tmp/olechollos-hook.txt",
+              "w",
+              encoding="utf-8"
+          ).write(text[:80])
+          PY
+
           read N1 N2 N3 N4 <<< "$(python3 - <<'PY'
           import os
 
           fps = 30
-          duration = max(
+
+          d = max(
               5.0,
               min(
                   15.0,
@@ -127,55 +155,80 @@ jobs:
               )
           )
 
-          total = int(round(duration * fps))
+          total = int(round(d * fps))
 
-          n1 = int(round(total * 0.14))
-          n2 = int(round(total * 0.34))
-          n3 = int(round(total * 0.27))
-          n4 = total - n1 - n2 - n3
+          n1 = max(
+              24,
+              int(round(total * 0.14))
+          )
 
-          print(n1, n2, n3, n4)
+          n2 = int(
+              round(total * 0.34)
+          )
+
+          n3 = int(
+              round(total * 0.27)
+          )
+
+          n4 = max(
+              1,
+              total - n1 - n2 - n3
+          )
+
+          print(
+              n1,
+              n2,
+              n3,
+              n4
+          )
           PY
           )"
-
-          echo "Frames: $N1 / $N2 / $N3 / $N4"
 
           case "$STYLE" in
 
             discount)
-              ZOOM2=0.15
-              ZOOM3=0.17
-              ZOOM4=0.18
+              Z2=0.16
+              Z3=0.20
+              Z4=0.18
 
-              POS2=0.30
-              POS3=0.70
-              POS4=0.92
+              P2=0.30
+              P3=0.78
+              P4=0.93
+              ;;
+
+            saving)
+              Z2=0.14
+              Z3=0.22
+              Z4=0.18
+
+              P2=0.34
+              P3=0.84
+              P4=0.93
               ;;
 
             price)
-              ZOOM2=0.13
-              ZOOM3=0.19
-              ZOOM4=0.18
+              Z2=0.13
+              Z3=0.21
+              Z4=0.18
 
-              POS2=0.38
-              POS3=0.78
-              POS4=0.92
+              P2=0.40
+              P3=0.76
+              P4=0.93
               ;;
 
             product)
-              ZOOM2=0.18
-              ZOOM3=0.14
-              ZOOM4=0.17
+              Z2=0.20
+              Z3=0.15
+              Z4=0.17
 
-              POS2=0.25
-              POS3=0.63
-              POS4=0.90
+              P2=0.25
+              P3=0.66
+              P4=0.91
               ;;
 
           esac
 
-          cat > reel-filter.txt <<EOF
-
+          cat > /tmp/reel-filter.txt <<EOF
           [0:v]
           scale=1080:1920,
           setsar=1,
@@ -186,6 +239,20 @@ jobs:
           d=${N1}:
           s=1080x1920:
           fps=30,
+          drawbox=
+          x=60:
+          y=180:
+          w=960:
+          h=150:
+          color=black@0.68:
+          t=fill,
+          drawtext=
+          fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:
+          textfile=/tmp/olechollos-hook.txt:
+          fontcolor=white:
+          fontsize=62:
+          x=(w-text_w)/2:
+          y=220,
           format=yuv420p
           [intro];
 
@@ -193,9 +260,9 @@ jobs:
           scale=1080:1920,
           setsar=1,
           zoompan=
-          z='1.00+${ZOOM2}*on/${N2}':
+          z='1.00+${Z2}*on/${N2}':
           x='iw/2-(iw/zoom/2)':
-          y='(ih-ih/zoom)*${POS2}':
+          y='(ih-ih/zoom)*${P2}':
           d=${N2}:
           s=1080x1920:
           fps=30,
@@ -206,34 +273,36 @@ jobs:
           scale=1080:1920,
           setsar=1,
           zoompan=
-          z='1.03+${ZOOM3}*on/${N3}':
+          z='1.03+${Z3}*on/${N3}':
           x='iw/2-(iw/zoom/2)':
-          y='(ih-ih/zoom)*${POS3}':
+          y='(ih-ih/zoom)*${P3}':
           d=${N3}:
           s=1080x1920:
           fps=30,
           format=yuv420p
-          [price];
+          [metric];
 
           [3:v]
           scale=1080:1920,
           setsar=1,
           zoompan=
-          z='1.05+${ZOOM4}*on/${N4}':
+          z='1.05+${Z4}*on/${N4}':
           x='iw/2-(iw/zoom/2)':
-          y='(ih-ih/zoom)*${POS4}':
+          y='(ih-ih/zoom)*${P4}':
           d=${N4}:
           s=1080x1920:
           fps=30,
           format=yuv420p
           [cta];
 
-          [intro][product][price][cta]
+          [intro]
+          [product]
+          [metric]
+          [cta]
           concat=n=4:v=1:a=0,
           fps=30,
           format=yuv420p
           [v]
-
           EOF
 
           case "$MUSIC_TRACK" in
@@ -267,22 +336,29 @@ jobs:
           VOL="$(python3 - <<'PY'
           import os
 
-          volume = int(os.environ["MUSIC_VOLUME"])
-          volume = max(0, min(100, volume))
-
-          print(volume / 100)
+          print(
+              max(
+                  0,
+                  min(
+                      100,
+                      int(os.environ["MUSIC_VOLUME"])
+                  )
+              ) / 100
+          )
           PY
           )"
 
           FADE_OUT="$(python3 - <<'PY'
           import os
 
-          duration = float(os.environ["DURATION"])
+          d = float(
+              os.environ["DURATION"]
+          )
 
           print(
               max(
                   0.0,
-                  duration - 0.55
+                  d - 0.55
               )
           )
           PY
@@ -299,7 +375,7 @@ jobs:
               -i "$IMAGE_PATH" \
               -stream_loop -1 \
               -i "$MUSIC_FILE" \
-              -filter_complex_script reel-filter.txt \
+              -filter_complex_script /tmp/reel-filter.txt \
               -map "[v]" \
               -map 4:a \
               -af "volume=${VOL},atrim=0:${DURATION},afade=t=in:st=0:d=0.30,afade=t=out:st=${FADE_OUT}:d=0.55,alimiter=limit=0.90" \
@@ -322,7 +398,7 @@ jobs:
               -i "$IMAGE_PATH" \
               -i "$IMAGE_PATH" \
               -i "$IMAGE_PATH" \
-              -filter_complex_script reel-filter.txt \
+              -filter_complex_script /tmp/reel-filter.txt \
               -map "[v]" \
               -t "$DURATION" \
               -r 30 \
@@ -336,7 +412,9 @@ jobs:
 
           fi
 
-          rm -f reel-filter.txt
+          rm -f \
+            /tmp/reel-filter.txt \
+            /tmp/olechollos-hook.txt
 
           test -s "renders/$SAFE_NAME"
 
@@ -359,11 +437,10 @@ jobs:
 
           fi
 
-          echo "Reel terminado"
+          echo "Reel listo"
           echo "Estilo: ${STYLE}"
-          echo "Música: ${MUSIC_TRACK}"
-          echo "Volumen: ${MUSIC_VOLUME}%"
-          echo "Movimiento: ACTIVO"
+          echo "Movimiento: activo"
+          echo "Pista: ${MUSIC_TRACK}"
 
       - name: Publish rendered file
         env:
@@ -387,7 +464,7 @@ jobs:
             2>/dev/null || true
 
           git commit \
-            -m "Render Olechollos Reel v6.2 · movement + real music" \
+            -m "Render Olechollos Reel v6.3 · audience hook + movement + music" \
             || exit 0
 
           git pull \
